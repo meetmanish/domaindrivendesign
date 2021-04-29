@@ -1,0 +1,70 @@
+https://medium.com/walmartglobaltech/implementing-cart-service-with-ddd-hexagonal-port-adapter-architecture-part-1-4dab93b3fa9f
+
+In the blogs (1) and (2) we talked about some of the motivations and benefits of a microservices architecture. In short, we are aiming to move at the pace of the changes — deploy features faster, gather feedback, and iterate. But, this increased agility shouldn’t come at the cost of the stability and reliability of the systems. Building modular applications based on some solid design principles and patterns helps us to achieve just that — Move fast, but without breaking things.
+Modular applications are easy to reason about, test, refactor, and make changes. We can also build things in parallel as we can have the team work on different parts of the module at the same time. The concepts of domain driven design that we saw in the previous blog are quite useful here as well. After all, modularity is about high cohesiveness between components that change together and low coupling between the components that don’t change together.
+In this blog, we will talk about some of the key domain driven design concepts and an application design pattern — Ports and Adapters — that help us build such modular applications. We will use a Cart microservice as an example in this blog. We will walk through some of the use cases to demonstrate these principles and patterns in action.
+Cart Microservice — Use cases
+Adding, updating, and removing items to cart are basic operations that the customers perform in an eCommerce website. This seemingly simple use case usually involves a chain of microservices, potentially belonging to different bounded contexts. For simplicity let’s assume the below:
+Cart microservice exposes a few REST APIs for adding/updating/removing items to the cart. This service also runs all the rules that govern these operations. For example, the users can add only a certain quantity or weight of an item to cart
+Pricing microservice calculates the total price of the cart applying any eligible promotions for the items
+Catalog microservice provides the item information that’s required by the cart microservice to execute some of its business rules
+Before we dive further into how this use case is built using Ports and Adapters pattern, it will be useful to quickly review some basic strategic domain driven design principles.
+Context Map
+Before we start building the use case, it’s necessary to understand the relationship between the Cart service and its dependent services — particularly the contexts they belong to, the integration mechanisms available, and the relationship between the teams that own these services.
+
+Fig 1. Bounded Context
+We went through Context maps in a bit more detail in the previous blog. We suggest you read it if you are not familiar with this concept.
+As can be seen from the diagram ( Fig 1), 4 different bounded contexts take part to complete the use case of adding an item to cart and these contexts could be owned by different teams. If our applications are not designed properly, any change in one service can impact another, hence losing their autonomy — co-ordinated deployments between multiple services are never fun even if they are all owned by the same team, let alone changes that involve multiple teams. So, interfaces exposed by these contexts and the relationship between the teams that own these services will play a part in determining the right integration pattern and any abstractions that we may need to build within the Cart service.
+For the sake of simplicity, let’s assume the below:
+1. Cart and Price contexts are owned by the same team. They are perhaps co-located and can collaborate more closely. Both these services provide well-defined interfaces such as REST APIs or gRPC that expose their functionality
+2. Catalog context is owned by a different team and likely this service is already in production and many consumers may already use the services owned by this context. Co-ordinated changes will be difficult. Let’s also assume that the Catalog context has a REST API that can provide the details of a product
+3. Order context depends on Cart context and owned by a different team as well. Order service receives the order once it’s confirmed by the user. This can be asynchronous event that the Cart Service emits, rather than a REST API. Order service subscribes to this event
+Strategic domain driven design defines a few patterns that could help us guide our design. We’ll talk about the ones that shape the design of the Cart service, but please do refer to Domain Driven Design book to dig deeper into these concepts. The below diagram shows the possible relationships between the different domains:
+
+Fig 2. Context Map
+Cart and Pricing contexts:
+The same team owns the Cart and Pricing contexts and they work closely with each other. The functionality and the features are also relatively tightly coupled compared to the other contexts. They can Partner with each other and call their services directly, via a REST API or gRPC, whichever be the interface exposed by another. In our case, Cart service can call Pricing service to price the cart by calling the gRPC interface of the Pricing service.
+Cart and Catalog contexts:
+Cart service depends on Catalog service to get the details of an item. Since the Catalog service is owned by a different team and these interfaces can change independently, it’s better that they enter into a Customer-Supplier relationship. In our case, Cart service is a customer to the Catalog service. The interfaces and the item domain model within the Catalog context can change independently of the Cart service. There are a couple of things Cart service could to avoid this tight coupling:
+1. Define an Item domain model, which represents an item in a cart, that’s independent of the Item domain model defined by the Catalog context.
+2. Create an Anti-corruption layer that adapts the Item domain model of the Catalog context to the Item domain model of the Cart context
+OMS and Cart contexts:
+OMS service subscribes to the events from the Cart service and these services are not owned by the same team. Hence, the teams are better off if they enter into a Customer-Supplier relationship — Cart being the Supplier and OMS being the Customer — as they will struggle to co-ordinate their changes. In this case, however, OMS service can Conform to the event data contract of the Cart context.
+Thus, the relationships that exist between Cart service and its dependencies are: Customer/Supplier, Conformist, and Partnership. DDD talks about a few more patterns — OSH, Shared Kernel, etc. — that are useful to consider if your use cases demand those.
+A few other Domain Driven Design principles
+In addition to the above design decisions, it’s useful to consider a few more Domain Driven Design patterns. These patterns and principles help in ensuring the goals that we discussed — refactorability, testability, and modularity.
+Ubiquitous language:
+Enrich the business logic with the Ubiquitous language and core concepts of the business domain. Everyone working in the project — developers, product managers, and business operations. — speak a common and non-ambiguous language when expressing the domain models. For example., in our case Item may mean different things in different contexts. In the catalog context, it would mean the “core product information”, but in the Cart context it would mean an “item added to cart”, and hence would contain the quantity of the item added, computed price of the item, etc.
+
+Fig 3. Ubiquitous Language
+It’s useful to work closely with your product managers and business operations teams to rigorously define the language of the domain and express it profusely within your code.
+Design non-anemic domain models:
+As you express the language of the domain, avoid using anemic domain models. An anemic domain model is one that just represents database entities and is meant as a OR mapping object — just getters and setters and no behavior. This programming paradigm tends to favor a procedural way of building business logic where the logic sits in few obscure procedural components and domain models are used just to save/retrieve data. Anemic model is an anti-pattern and goes against the basic principle of Object-oriented design — keep data and the process that operates on the data together.
+Separation of concerns:
+An application is composed of many different components responsible for different functions. Modularity, and hence refactorability and testability, depends on creating clear boundaries between the these. Let’s review the various different concerns in our case:
+1. Core Domain logic: The Core application logic, enriched with the Ubiquitous language of the domain, should be largely isolated from the other ingress/egress infrastructure concerns. This enables the application logic to change autonomously and regardless of how the consumers access the application. For example, the application can expose REST APIs, gRPC interfaces, or any kind of pub/sub interfaces, but the core domain should be agnostic of the ways in which the application logic is invoked
+2. Upstream dependencies
+The applications that the Cart service depends on — Catalog, Pricing, Profile, and Orders. These dependencies will express their models in the Ubiquitous language of their corresponding domain and hence Cart service will require translation of these models to its own domain model. Cart service will require adapters (anti-corruption layers) to do this translation
+3. Downstream dependencies
+In our case, the downstream dependencies are consumers of the Cart service — web and mobile apps, for example. Cart service can choose to expose various intention-revealing interfaces — REST APIs, gRPC interfaces, or events to cater to the consumers. Please note that building these interfaces usually involve components that handle requests, DTOs that unmarshall data, and components that do various input validations. These are concerns that are independent of the domain logic and they perhaps belong in a context on their own. Separating them into their own context and avoiding any tight coupling to domain logic is imperative to maintain model integrity and maintainability
+Each of the above concerns require high cohesion within them and low coupling between them. There are several ways to structure the code repository, each with its own benefits and drawbacks. We found Ports and Adapters pattern along with the core principles of Domain Driven Design to be a natural fit for building these use cases.
+Ports and Adapter/Hexagonal Design Pattern approach
+Ports and Adapters is a design pattern that helps us deal with some of the concerns we discussed above. This design pattern separates the application into two sections broadly — application core and external.
+
+Fig 4. Cart service — Ports and Adapter view
+Application core: All the domain logic forms the core and it’s largely isolated from all external concerns. This is also the part of the application that’s enriched with the principles of Domain Driven Design — Ubiquitous language, Non-anemic domain models, intention revealing interfaces, and domain services (more on this later).
+External: External concerns include any and all inbound and outbound connections from the application. The components that handle inbound traffic are called Primary ports and adapters, and those that handle outbound traffic are called Secondary ports and adapters.
+Some important points to note:
+1. Think of Ports as interfaces that the Adapters implement. These are usually the infrastructure components that handle I/O to and from the application. This is also the area where the Anti-corruption layer resides.
+2. Core (Domain) handles the core business logic and defines the ports that the adapters comply to. For example, in our case, the Cart service requires Catalog data which is provided by the Catalog service. The Core domain defines the contract of this data through a well-defined interface and the Catalog adapter is responsible for implementing this interface, calling the Catalog service, and translate the data to the format that the core domain expects.
+3. Thus, the primary and secondary layers depend on domain. It’s useful to picture this architecture as inside-out from the Domain i.e. Domain drives the business logic and the ports and adapters comply to the requirements of the domain. This is an important distinction between this architecture and the Layered architecture. We’ll cover this in the part 2 of this blog.
+A comparison or mapping of the DDD concepts to Ports and Adapters pattern below.
+
+Fig 5. DDD and Ports & Adapter
+Advantages of Ports/Adapter pattern
+Use case driven and naturally fits DDD
+Ease of understanding — With a clear separation of concern with isolated layering application core, it will be easy to understand application as it is use case driven.
+Faster development — Adding a new primary port/adapter are simple, there by reduces time to market
+Testing — With well defined ports, application, domain can be tested with mock infra layer alone. Core of application can be tested fully without the need of primary port/adapters like REST/SOAP/GRPC/UI etc.
+Roughly, the application can be segregated into the below layers. We will see these concepts and the DDD patterns in action, with code examples, in the part 2 of this blog.
+
